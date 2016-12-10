@@ -10,6 +10,8 @@
 #include <inttypes.h>
 #include <linux/kdev_t.h>
 
+#define DEBUGGING 0
+
 /**
  * @brief Modifies the data size originally reserved by an inode, reserving or removing space if needed.
  *
@@ -506,8 +508,40 @@ static int my_unlink(const char *path){
 	return 0;
 }
 
-static ssize_t my_read(int fd, void *buf, size_t nbytes){
+static int my_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+	int readed_bytes = 0;
+	int currentBlock = -1;
+	int i;
+	NodeStruct *node = myFileSystem.nodes[fi->fh];
 	
+	while ((readed_bytes < size) && (currentBlock != node->blocks[node->numBlocks - 1])){//si los bytes leidos son menos que los pedidos y el bloque procesado no es el ultimo del nodo
+		int offBlock;
+		currentBlock = node->blocks[offset / BLOCK_SIZE_BYTES]; //bloque actual
+		offBlock = offset % BLOCK_SIZE_BYTES;//desplazamiento dentro del bloque actual
+		
+		//colocampos el puntero de lectura en el bloque adecuado con el desplazamiento adecuado
+		if(lseek(myFileSystem.fdVirtualDisk, currentBlock * BLOCK_SIZE_BYTES + offset, SEEK_SET) == (off_t) - 1) 
+			return -EIO;
+		//Si los bytes que vamos a leer del bloque actual mas los que llevamos leidos no superan el tamaño dado leemos
+		if (readed_bytes + (BLOCK_SIZE_BYTES - offBlock) < size){
+			if ((readed_bytes += read(myFileSystem.fdVirtualDisk, buf + readed_bytes, BLOCK_SIZE_BYTES - offBlock)) == -1)
+				return -EIO;
+		}
+		//si los bytes que vamos a leer del bloque actual mas los que llevamos leidos superan el tamaño leemos solo los que nos faltan
+		else{
+			if ((readed_bytes += (int) read(myFileSystem.fdVirtualDisk, buf + readed_bytes, size - readed_bytes)) == -1)	
+				return -EIO;	
+		}
+	}
+	
+	//rellenamos con ceros el resto
+	for (i = readed_bytes; i < size; i++)
+		buf[i] = '0';
+	
+	if (DEBUGGING)
+		printf("\n\n\n %s \n\n\n", buf);
+	
+	return readed_bytes;
 }
 
 struct fuse_operations myFS_operations = {
@@ -519,6 +553,6 @@ struct fuse_operations myFS_operations = {
 	.release	= my_release,					// Close an opened file
 	.mknod		= my_mknod,
 	.unlink		= my_unlink,
-	.read		= my_read						// Create a new file
+	.read		= my_read,						// Create a new file
 };
 
